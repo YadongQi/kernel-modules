@@ -12,8 +12,11 @@
 #include <linux/slab.h>
 #include <linux/sched.h>
 #include <linux/uaccess.h>
+#include <linux/version.h>
 
 //#define SHOW_LOG
+
+#define VIRTIO_ID_PIPE_NEW     32 /* virtio pipe new */
 
 #define RENDER_CONTROL_BUFFER_SIZE 0x1000
 #define RENDER_READ_BUFFER_SIZE 0x10000
@@ -103,11 +106,14 @@ struct virtpipe_packet {
 
 static struct virtpipe_dev *g_pipe_dev = NULL;
 static struct virtpipe* g_alive_pipe = NULL;
+#ifdef SHOW_LOG
 static const char* operation_name[3] = {"control", "read", "write"};
+#endif
 
 static int virtpipe_send_recv(struct virtpipe* pipe, struct virtpipe_packet* packet, int operation) {
 	int err;
 	struct scatterlist sg[1];
+	struct scatterlist *sgs[1] = { &sg[0] };
 	unsigned int len;
 	unsigned long flags = 0;
 	spinlock_t* queue_lock = &pipe->channel->queue[operation].lock;
@@ -119,8 +125,8 @@ static int virtpipe_send_recv(struct virtpipe* pipe, struct virtpipe_packet* pac
 
 	if (pipe->channel->busy_wait) {
 		spin_lock_irqsave(queue_lock, flags);
-		if (virtqueue_add_buf(queue, sg, 1, 0, packet, GFP_ATOMIC) < 0) {
-			printk(KERN_DEBUG "%s: virtqueue_add_buf fail!!!\n", __FUNCTION__);
+		if (virtqueue_add_sgs(queue, sgs, 1, 0, packet, GFP_ATOMIC) < 0) {
+			printk(KERN_DEBUG "%s: virtqueue_add_sgs fail!!!\n", __FUNCTION__);
 			spin_unlock_irqrestore(queue_lock, flags);
 			err = -EIO;
 			goto fail;
@@ -154,8 +160,8 @@ static int virtpipe_send_recv(struct virtpipe* pipe, struct virtpipe_packet* pac
 		printk(KERN_DEBUG "%s: op=%s, pipe=%s, len=%d begin\n",
 			__FUNCTION__, operation_name[operation], pipe->name, packet->size);
 #endif
-		if (virtqueue_add_buf(queue, sg, 1, 0, packet, GFP_ATOMIC) < 0) {
-			printk(KERN_DEBUG "%s: virtqueue_add_buf fail!!!\n", __FUNCTION__);
+		if (virtqueue_add_sgs(queue, sgs, 1, 0, packet, GFP_ATOMIC) < 0) {
+			printk(KERN_DEBUG "%s: virtqueue_add_sgs fail!!!\n", __FUNCTION__);
 			spin_unlock_irqrestore(queue_lock, flags);
 			err = -EIO;
 			goto fail;
@@ -189,7 +195,11 @@ static void virtpipe_unlock_buffer(struct virtpipe* pipe, int operation) {
 	complete(&pipe->queue[operation].buffer_ready);
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
 static void virtpipe_timer_func(unsigned long channel) {
+#else
+static void virtpipe_timer_func(struct timer_list *channel) {
+#endif
 	int err;
 	struct virtpipe* pipe = g_alive_pipe;
 	struct virtpipe_packet* packet = NULL;
@@ -835,7 +845,7 @@ static int virtpipe_probe(struct virtio_device *vdev)
 		io_callbacks[5] = virtpipe_queue_callback;
 	}
 
-	err = vdev->config->find_vqs(vdev, 6, vqs, io_callbacks, io_names);
+	err = virtio_find_vqs(vdev, 6, vqs, io_callbacks, io_names, NULL);
 	if (err) {
 		printk(KERN_DEBUG "%s: find_vqs fail err=%d\n", __FUNCTION__, err);
 		goto fail_find_vqs;
@@ -867,7 +877,11 @@ static int virtpipe_probe(struct virtio_device *vdev)
 		goto fail_alloc_alive_pipe;
 	}
 
-	setup_timer(&g_pipe_dev->alive_timer,virtpipe_timer_func,0);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 15, 0)
+	setup_timer(&g_pipe_dev->alive_timer, virtpipe_timer_func, 0);
+#else
+	timer_setup(&g_pipe_dev->alive_timer, virtpipe_timer_func, 0);
+#endif
 	mod_timer(&g_pipe_dev->alive_timer, jiffies + msecs_to_jiffies(5000));
 
 	return 0;
@@ -919,7 +933,7 @@ static struct virtio_driver virtio_pipe_driver = {
 
 static int __init init(void)
 {
-	printk(KERN_DEBUG "virtio pipe new driver init\n");
+	printk(KERN_DEBUG "virtio pipe new driver init id=%d\n", id_table[0].device);
 	return register_virtio_driver(&virtio_pipe_driver);
 }
 
