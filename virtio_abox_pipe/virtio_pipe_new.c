@@ -169,7 +169,7 @@ static int virtpipe_send_recv(struct virtpipe* pipe, struct virtpipe_packet* pac
 		virtqueue_kick(queue);
 		spin_unlock_irqrestore(queue_lock, flags);
 		// wait for result
-		wait_for_completion(event);
+		wait_for_completion_interruptible(event);
 #ifdef SHOW_LOG
 		printk(KERN_DEBUG "%s: op=%s, pipe=%s, len=%d end\n",
 			__FUNCTION__, operation_name[operation], pipe->name, pipe->len);
@@ -183,7 +183,7 @@ fail:
 
 static struct virtpipe_packet* virtpipe_lock_buffer(struct virtpipe* pipe, int operation) {
 	while (atomic_cmpxchg(&pipe->queue[operation].buffer_using, 0, 1) != 0) {
-		wait_for_completion(&pipe->queue[operation].buffer_ready);
+		wait_for_completion_interruptible(&pipe->queue[operation].buffer_ready);
 	}
 	return (struct virtpipe_packet*)pipe->queue[operation].buffer;
 }
